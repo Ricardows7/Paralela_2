@@ -1,12 +1,15 @@
-.PHONY = all clean bin
+.PHONY: all clean
 
-all : bin
+CXX      := mpic++
+CXXFLAGS := -std=c++11 -Wall -O3
 
-bin : shsup
-
-clean:
-	rm -rf shsup
+all: shsup inputgen
 
 shsup: shortest_superstring.cc
-	$(CXX) -std=c++11 -Wall -O3 shortest_superstring.cc -o shsup
+	$(CXX) $(CXXFLAGS) shortest_superstring.cc -o shsup
 
+inputgen: input-generator.cc
+	$(CXX) $(CXXFLAGS) input-generator.cc -o inputgen
+
+clean:
+	rm -f shsup inputgen
