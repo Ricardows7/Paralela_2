@@ -5,6 +5,9 @@
 #include <utility>
 #include <vector>
 #include <map>
+#include <iterator>   // std::next
+#include <cstddef>    // std::size_t
+#include <queue>
 
 #define standard_input  std::cin
 #define standard_output std::cout
@@ -14,7 +17,6 @@
 using Boolean = bool ;
 using Size    = std::size_t ;
 using String  = std::string ;
-using Map = std::map<int, String> ;
 using Vector = std::vector<int> ;
 
 using InStream  = std::istream ;
@@ -73,160 +75,172 @@ is_empty (const C& x) -> Boolean
     return x.empty () ;
 }
 
+// forward-declare Entry (já definido mais abaixo no arquivo)
+struct Entry;
+
+// ---- protótipos alinhados com as definições atuais ----
+Boolean is_prefix (const String& a, const String& b);
+inline auto suffix_from_position (const String& x, SizeType <String> i) -> String;
+inline auto remove_prefix (const String& x, SizeType <String> n) -> String;
+auto all_suffixes (const String& x) -> Set <String>;
+auto common_suffix_and_prefix (const String& a, const String& b) -> String;
+inline auto overlap_value (const String& s, const String& t) -> SizeType <String>;
+auto overlap (const String& s, const String& t) -> String;
+
+int pop_two_elements_and_push_overlap (Entry e, Pair<String, String> p);
+auto pair_of_strings_with_highest_overlap_value(Entry best) -> Pair<String, String>;
+auto shortest_superstring () -> String;
+
+inline auto write_string_and_break_line (OutStream& out, const String& s) -> void;
+inline auto read_size (InStream& in) -> Size;
+inline auto read_string (InStream& in) -> String;
+void read_strings_from_standard_input ();
+inline auto write_string_to_standard_ouput (const String& s) -> void;
+
+void create_heap();
+void update_heap(int index);
+void reload_heap(int index);
+
+bool get_valid_top(Entry &out);
+
+// ----------------- estado global -----------------
+
+struct Entry {
+    int i, j;
+    int overlap; // was overlap_value
+     bool operator<(const Entry& o) const {
+        if (overlap != o.overlap) return overlap < o.overlap; // maior overlap first
+        if (i != o.i) return i > o.i;   // smaller i wins -> make larger (=false) lose
+        return j > o.j;                 // smaller j wins
+    }
+};
+
+
+std::priority_queue<Entry> Holder;
+
+int dimension = 0;
+std::vector<bool> alive;
+std::vector<std::string> strings;
+std::vector<int> best_pair;
+
+// ----------------- implementações -----------------
+
 Boolean is_prefix (const String& a, const String& b)
 {
-    if (get_size (a) > get_size (b))
-        return false ;
-    if ( !
-            ( std::mismatch
-                ( a.begin ()
-                , a.end   ()
-                , b.begin () )
-                    .first == a.end () ) )
-        return false ;
-    return true ;
+    if (get_size(a) > get_size(b)) return false;
+    return b.compare(0, a.size(), a) == 0;
 }
 
-inline auto
-suffix_from_position (const String& x, SizeType <String> i) -> String
+inline auto suffix_from_position (const String& x, SizeType <String> i) -> String
 {
     return x.substr (i) ;
 }
 
-inline auto
-remove_prefix (const String& x, SizeType <String> n) -> String
+inline auto remove_prefix (const String& x, SizeType <String> n) -> String
 {
     if (get_size (x) > n)
         return suffix_from_position (x, n) ;
-    return x ;
+    return std::string{}; // retorna string vazia quando não há sufixo
 }
 
-auto
-all_suffixes (const String& x) -> Set <String>
+auto all_suffixes (const String& x) -> Set <String>
 {
     Set <String> ss ;
     SizeType <String> n = get_size (x) ;
-    while (-- n) {
+    // gera sufixos não-vazios (evita o próprio string completo)
+    while (n-- > 0) {
         ss.insert (x.substr (n)) ;
     }
     return ss ;
 }
 
-auto
-commom_suffix_and_prefix (const String& a, const String& b) -> String
+auto common_suffix_and_prefix (const String& a, const String& b) -> String
 {
     if (is_empty (a)) return "" ;
     if (is_empty (b)) return "" ;
-    String x = "" ;
+    String best = "" ;
     for (const String& s : all_suffixes (a)) {
-        if (is_prefix (s, b) && get_size (s) > get_size (x)) {
-            x = s ;
+        if (is_prefix (s, b) && get_size (s) > get_size (best)) {
+            best = s ;
         }
     }
-    return x ;
+    return best ;
 }
 
-inline auto
-overlap_value (const String& s, const String& t) -> SizeType <String>
+inline auto overlap_value (const String& s, const String& t) -> SizeType <String>
 {
-    return get_size (commom_suffix_and_prefix (s, t)) ;
+    return get_size (common_suffix_and_prefix (s, t)) ;
 }
 
-auto
-overlap (const String& s, const String& t) -> String
+auto overlap (const String& s, const String& t) -> String
 {
-    String c = commom_suffix_and_prefix (s, t) ;
+    String c = common_suffix_and_prefix (s, t) ;
     return s + remove_prefix (t, get_size (c)) ;
 }
 
-
-int pop_two_elements_and_push_overlap
-        (const Pair <String, String>& p)
+int pop_two_elements_and_push_overlap (Entry e, Pair<String, String> p)
 {
     String place_holder = overlap (p.first, p.second) ;
-    delete_by_string(p.second);
-    return sub_string(p.first, place_holder);
+
+    alive[e.i] = false;
+    alive[e.j] = false;
+
+    int size = strings.size();
+    strings.push_back(place_holder);
+    alive.push_back(true);
+    
+    return size;
 }
 
-// auto
-// all_distinct_pairs (const Set <String>& ss) -> Set <Pair <String, String>>
-// {
-//     Set <Pair <String, String>> x ;
-//     for (const String& s1 : ss) {
-//         for (const String& s2 : ss) {
-//             if (s1 != s2) x.insert (make_pair (s1, s2)) ;
-//         }
-//     }
-//     return x ;
-// }
-
-// auto
-// highest_overlap_value
-//         (const Set <Pair <String, String>>& sp) -> Pair <String, String>
-// {
-//     Pair <String, String> x = first_element (sp) ;
-//     for (const Pair <String, String>& p : sp) {
-//         if ( overlap_value (p.first, p.second)
-//                 > overlap_value (x.first, x.second) )
-//         {
-//             x = p ;
-//         }
-//     }
-//     return x ;
-// }
-
-auto
-pair_of_strings_with_highest_overlap_value() -> Pair <String, String>
+auto pair_of_strings_with_highest_overlap_value(Entry best) -> Pair<String, String>
 {
-    Pair <String, String> result;
+    return { strings[best.i], strings[best.j] };
+}
 
-    int perm_row = 0,  perm_column = 0, temp_row, temp_column;
-    int max_overlap_value = -1, temp_overlap_value;
-   
-    for (const auto& row : relation_coordinate_string){
-        temp_row = row.first;
-        for (const auto& column : relation_coordinate_string){
-            temp_column = column.first;
+auto shortest_superstring () -> String
+{
+    int alive_count = 0;
+    for (bool a : alive) if (a) alive_count++;
 
-            temp_overlap_value = matrix[get_coordinates(row.first, column.first)];
-            if (temp_overlap_value > max_overlap_value){
-                perm_row = temp_row;
-                perm_column = temp_column;
-                max_overlap_value = temp_overlap_value;
-            }
-        }
+    if (is_empty (Holder)) return "" ;
+    // garantir que existe pelo menos 1 elemento
+
+    while (alive_count > 1) {
+        Entry best;
+        if (!get_valid_top(best)) break;
+        Holder.pop();
+        Pair<String,String> best_pair = pair_of_strings_with_highest_overlap_value(best);
+        int new_index = pop_two_elements_and_push_overlap (best, best_pair) ;
+        if (new_index < 0) continue;
+        alive_count -= 1;   //1 string criada, 2 consumidas
+        //reload_heap(new_index);
+        update_heap(new_index);
     }
 
-    result = { relation_coordinate_string.at(perm_row), relation_coordinate_string.at(perm_column) };
-    return result ;
-}
-
-// auto
-// shortest_superstring (std::map<int,String> t) -> String
-// {
-//     if (is_empty (t)) return "" ;
-//     while (t.size > 1) {
-//         t = pop_two_elements_and_push_overlap
-//             ( t
-//             , pair_of_strings_with_highest_overlap_value (t) ) ;
-//     }
-//     return first_element (t) ;
-// }
-
-auto
-shortest_superstring () -> String
-{
-    if (is_empty (relation_strig_coordinate)) return "" ;
-    while (relation_strig_coordinate.size() > 1) {
-        int new_index = pop_two_elements_and_push_overlap (pair_of_strings_with_highest_overlap_value()) ;
-        load_matrix_string(new_index);
+    if (!strings.empty() && alive.back()) {
+        return strings.back();
     }
-    return relation_coordinate_string.begin()->second;
+
+    // fallback: varre de trás pra frente (mais rápido que do início)
+    for (int i = (int)strings.size() - 1; i >= 0; --i) {
+        if (alive[i]) return strings[i];
+    }
+    return std::string{};
 }
 
+bool get_valid_top(Entry &out){
+    while (!Holder.empty()){
+        Entry e = Holder.top();
+        
+        if (!alive[e.i] || !alive[e.j]) { Holder.pop(); continue; }
+        out = e;
+        return true;
+    }
+    return false;
+}
 
 inline auto
-write_string_and_break_line (OutStream& out, String s) -> void
+write_string_and_break_line (OutStream& out, const String& s) -> void
 {
     out << s << std::endl ;
 }
@@ -247,23 +261,55 @@ read_string (InStream& in) -> String
     return s ;
 }
 
-auto
-read_strings_from_standard_input ()
+void read_strings_from_standard_input ()
 {
-    using N = SizeType <Set <String>> ;
-    
-    int index = 0;
-    dimension = N (read_size (standard_input)) ;
-    N n = dimension;
+    dimension = static_cast<int>(read_size (standard_input)) ;
+    if (dimension <= 0) return;
 
-    relation_strig_coordinate.clear();
-    
-    while (n --){
+    for (int i = 0; i < dimension; ++i) {
         String s = read_string(standard_input);
-        add_string(s, index);
-        index++;
-    } 
-    return;
+        strings.push_back(s);
+        alive.push_back(true);
+    }
+}
+
+void create_heap() {
+    int N = strings.size();
+    for (int i = 0; i < N; i++)
+        update_heap(i);
+}
+
+void update_heap(int index) {
+    if (!alive[index]) return;
+
+    int best_j = -1;
+    String &base = strings[index];
+    int best_overlap = -1;
+
+    int N = strings.size();
+    for (int j = 0; j < N; j++){
+        if (j == index) continue;
+        if (!alive[j]) continue;
+
+        int local_overlap = overlap_value(base, strings[j]);
+        if (local_overlap > best_overlap){
+            best_overlap = local_overlap;
+            best_j = j;
+        }
+    }
+    if (best_j >= 0){
+        Holder.push({ index, best_j, best_overlap });
+        //best_pair.push_back(best_j);
+    }
+}
+
+void reload_heap(int index) {
+    update_heap(index);
+    int N = best_pair.size();
+    for (int i = 0; i < N; i++){
+        if (!alive[best_pair[i]])
+            update_heap(i);
+    }
 }
 
 inline auto
@@ -272,84 +318,11 @@ write_string_to_standard_ouput (const String& s) -> void
     write_string_and_break_line (standard_output, s) ;
 }
 
-int dimension;
-std::vector<int> matrix;
-std::map<int, String> relation_coordinate_string;
-std::map<String, int> relation_strig_coordinate;
-
 auto
 main (int argc, char const* argv[]) -> int
 {
-    read_strings_from_standard_input () ;
-    load_matrix_full();
+    read_strings_from_standard_input() ;
+    if (dimension > 0) create_heap();
     write_string_to_standard_ouput (shortest_superstring ()) ;
     return 0 ;
-}                                                                                          
-
-auto
-get_coordinates(int row, int column){
-    return (row * dimension) + column;
-}
-
-auto 
-get_row_and_column_by_index(int index) -> std::pair<int,int>{
-    int row = index / dimension;
-    int column = index % dimension;
-
-    return { row, column };
-}
-
-void add_string (String s, int index) {
-    relation_strig_coordinate[s] = index;
-    relation_coordinate_string[index] = s;
-}
-
-int sub_string (String original, String newbie) {
-    int coordinate = relation_strig_coordinate[original];
-    relation_strig_coordinate.erase(original);
-    relation_coordinate_string[coordinate] = newbie;
-    relation_strig_coordinate[newbie] = coordinate;
-    
-    return coordinate;
-}
-
-void delete_by_string (String s) {
-    int coordinate = relation_strig_coordinate[s];
-    relation_strig_coordinate.erase(s);
-    relation_coordinate_string.erase(coordinate);
-
-    return;
-}
-
-void load_matrix_string (int index) {
-    String fav = relation_coordinate_string.at(index);
-
-    for (const auto& row : relation_coordinate_string){
-        matrix[get_coordinates(row.first, index)] = overlap_value(
-            relation_coordinate_string.at(row.first), fav);
-    }
-
-    for (const auto& col : relation_coordinate_string){
-        if (col.first == index){
-            matrix[get_coordinates(index,index)] = SAMESTRINGVALUE;
-            continue;
-        }
-        matrix[get_coordinates(index, col.first)] = overlap_value(
-            fav, relation_coordinate_string.at(col.first));
-    }
-}
-
-void load_matrix_full() {
-    for (const auto& row : relation_coordinate_string){
-        int row_ind = row.first;
-        for (const auto& col : relation_coordinate_string){
-            int col_ind = col.first;
-            if (row_ind == col.first){
-                matrix[get_coordinates(row_ind, row_ind)] = SAMESTRINGVALUE;
-                continue;
-            }
-            matrix[get_coordinates(row_ind, col_ind)] = overlap_value(
-                relation_coordinate_string.at(row_ind), relation_coordinate_string.at(col_ind));
-        }
-    }
 }

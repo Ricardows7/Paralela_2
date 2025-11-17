@@ -1,0 +1,1 @@
+entrada,tipo,threads,mean_total_ms,std_total_ms,mean_parallel_ms,std_parallel_ms,serial_percent_mean,speedup,efficiency_percent,runs
