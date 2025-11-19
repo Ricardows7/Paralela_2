@@ -3,7 +3,7 @@
 CXX      := mpic++
 CXXFLAGS := -std=c++11 -Wall -O3
 
-all: shsup inputgen shsup_seq
+all: shsup input_generator shsup_seq
 
 shsup: shortest_superstring.cc
 	$(CXX) $(CXXFLAGS) shortest_superstring.cc -o shsup
@@ -11,8 +11,8 @@ shsup: shortest_superstring.cc
 shsup_seq: shortest_superstring.cc
 	$(CXX) $(CXXFLAGS) -fopenmp shortest_superstring.cc -o shsup_seq
 
-inputgen: input-generator.cc
-	$(CXX) $(CXXFLAGS) input-generator.cc -o inputgen
+input_generator: input-generator.cc
+	$(CXX) $(CXXFLAGS) input-generator.cc -o input_generator
 
 clean:
-	rm -f shsup inputgen shsup_seq
+	rm -f shsup input_generator shsup_seq

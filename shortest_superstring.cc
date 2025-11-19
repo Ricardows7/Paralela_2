@@ -1,402 +1,514 @@
+#include <mpi.h>
+#include <omp.h>
 #include <algorithm>
 #include <iostream>
-#include <set>
+#include <vector>
 #include <string>
 #include <utility>
-
-#include <mpi.h>
-
-#include <omp.h>
-#include <vector>
+#include <list>
+#include <set>
+#include <iterator>
 #include <cstddef>
+#include <climits>
+
+using Boolean = bool;
+using Size = std::size_t;
+using String = std::string;
 
 #define standard_input  std::cin
 #define standard_output std::cout
 
-using Boolean = bool ;
-using Size    = std::size_t ;
-using String  = std::string ;
-
-using InStream  = std::istream ;
-using OutStream = std::ostream ;
-
-using Matrix = std::vector<std::vector<int>> ; 
-using StringVector = std::vector<std::string> ;
-
 template <typename T, typename U>
-using Pair = std::pair <T, U> ;
+using Pair = std::pair<T, U>;
 
-template <typename T, typename C = std::less <T>>
-using Set = std::set <T> ;
+template <typename T, typename C = std::less<T>>
+using Set = std::set<T>;
 
 template <typename T>
-using SizeType = typename T :: size_type ;
+using SizeType = typename T::size_type;
 
-//  -------------------   funcoes base   ----------------------------
-struct LocalBest {
-    int overlap; //-1 significa nada
-    int row;
-    int col;
-    int owner; //quem mandou o localbest
-}
-
-static LocalBest make_localbest(int ov, int rol, int col, int own) {
-    return LocalBest{ov, rol, col, own};
-}
-
-//criterios apos o 1 nessa funcao servem para desempate e consistencia de resposta :)
-static bool better_localbest(const LocalBest &a, const LocalBest &b) {
-    if (a.overlap != b.overlap) return a.overlap > b.overlap;   //1 criterio: quem tem maior overlap
-    if (a.row != b.row) return a.i < b.i;   //2 criterio: quem tem menor numero de linha
-    if (a.col != b.col) return a.col < b.col;   //3 criterio: quem tem menor numero de coluna
-    return a.own < b.own;   //ultimo criterio: indice do dono
-}
+using InStream = std::istream;
+using OutStream = std::ostream;
 
 //  -------------------   funcoes utils   ----------------------------
 
 template <typename C> inline auto
-get_size (const C& x) -> SizeType <C>
+get_size(const C& x) -> SizeType<C>
 {
-    return x.size () ;
+    return x.size();
 }
 
 template <typename C> inline auto
-at_least_two_elements_in (const C& c) -> Boolean
+at_least_two_elements_in(const C& c) -> Boolean
 {
-    return get_size (c) > SizeType <C> (1) ;
+    return get_size(c) > SizeType<C>(1);
 }
 
 template <typename T> inline auto
-first_element (const Set <T>& x) -> T
+first_element(const Set<T>& x) -> T
 {
-    return *(x.begin ()) ;
+    return *(x.begin());
 }
 
 template <typename T> inline auto
-second_element (const Set <T>& x) -> T
+second_element(const Set<T>& x) -> T
 {
-    return *(std::next (x.begin ())) ;
+    return *(std::next(x.begin()));
 }
 
 template <typename T> inline auto
-remove (Set <T>& x, const T& e) -> Set <T>&
+remove(Set<T>& x, const T& e) -> Set<T>&
 {
-    x.erase (e) ;
-    return x ;
+    x.erase(e);
+    return x;
 }
 
 template <typename T> inline auto
-push (Set <T>& x, const T& e) -> Set <T>&
+push(Set<T>& x, const T& e) -> Set<T>&
 {
-    x.insert (e) ;
-    return x ;
+    x.insert(e);
+    return x;
 }
 
 template <typename C> inline auto
-is_empty (const C& x) -> Boolean
+is_empty(const C& x) -> Boolean
 {
-    return x.is_empty () ;
+    return x.empty();
 }
 
 //  -------------------   funcoes calculo overlap simples   ----------------------------
 
-Boolean is_prefix (const String& a, const String& b)
-{
-    if (get_size (a) > get_size (b))
-        return false ;
-    if ( !
-            ( std::mismatch
-                ( a.begin ()
-                , a.end   ()
-                , b.begin () )
-                    .first == a.end () ) )
-        return false ;
-    return true ;
-}
-
 inline auto
-suffix_from_position (const String& x, SizeType <String> i) -> String
+overlap_value(const String& a, const String& b) -> Size //calcula o valor de overlap a + b
 {
-    return x.substr (i) ;
-}
+    if (a.empty() || b.empty()) return 0;
 
-inline auto
-remove_prefix (const String& x, SizeType <String> n) -> String
-{
-    if (get_size (x) > n)
-        return suffix_from_position (x, n) ;
-    return x ;
+    Size maior_overlap = std::min(a.size(), b.size());
+    
+    for (Size k = maior_overlap; k > 0; --k) 
+        if (a.compare(a.size() - k, k, b, 0, k) == 0) 
+            return k;
+
+    return 0;
 }
 
 auto
-all_suffixes (const String& x) -> Set <String>
+overlap(const String& s, const String& t) -> String
 {
-    Set <String> ss ;
-    SizeType <String> n = size (x) ;
-    while (-- n) {
-        ss.insert (x.substr (n)) ;
-    }
-    return ss ;
-}
-
-auto
-commom_suffix_and_prefix (const String& a, const String& b) -> String
-{
-    if (is_empty (a)) return "" ;
-    if (is_empty (b)) return "" ;
-    String x = "" ;
-    for (const String& s : all_suffixes (a)) {
-        if (is_prefix (s, b) && get_size (s) > get_size (x)) {
-            x = s ;
-        }
-    }
-    return x ;
-}
-
-inline auto
-overlap_value (const String& s, const String& t) -> SizeType <String>
-{
-    return get_size (commom_suffix_and_prefix (s, t)) ;
-}
-
-auto
-overlap (const String& s, const String& t) -> String
-{
-    String c = commom_suffix_and_prefix (s, t) ;
-    return s + remove_prefix (t, get_size (c)) ;
+    Size k = overlap_value(s, t);
+    return s + t.substr(k); 
 }
 
 //  -------------------   funcoes I/O   ----------------------------
 
 inline auto
-write_string_and_break_line (OutStream& out, String s) -> void
+write_string_and_break_line(OutStream& out, String s) -> void
 {
-    out << s << std::endl ;
+    out << s << std::endl;
 }
 
 inline auto
-read_size (InStream& in) -> Size
+read_size(InStream& in) -> Size
 {
-    Size n ;
-    in >>  n ;
-    return n ;
+    Size n;
+    in >> n;
+    return n;
 }
 
 inline auto
-read_string (InStream& in) -> String
+read_string(InStream& in) -> String
 {
-    String s ;
-    in >>  s ;
-    return s ;
-}
-
-auto
-read_strings_from_standard_input () -> Set <String>
-{
-    using N = SizeType <Set <String>> ;
-    Set <String> x ;
-    N n = N (read_size (standard_input)) ;
-    while (n --) x.insert (read_string (standard_input)) ;
-    return x ;
+    String s;
+    in >> s;
+    return s;
 }
 
 inline auto
-write_string_to_standard_ouput (const String& s) -> void
+write_string_to_standard_ouput(const String& s) -> void
 {
-    write_string_and_break_line (standard_output, s) ;
+    write_string_and_break_line(standard_output, s);
 }
 
-//  -------------------   funcoes MPI utils  ----------------------------
+// ----------------- funcoes de slots -----------------
 
-static void mpi_broadcast_strings(int rank, StringVector &strings) {
-    if (rank == 0) {    //host
-        int n = strings.size();
-        MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);   //envia quantidade de strings pra todos
-        for (int i = 0; i < n; i++){
-            int length = strings[i].size();
-            MPI_Bcast(&len, 1, MPI_INT, 0 MPI_COMM_WORLD);                              //pra cada string, envia o tamanho
-            MPI_Bcast((void*)strings[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);      //seguido da string em si
-        }
-    } else {    //nao host
-        int n;
-        MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);   //recebe quantidade de strings
-        strings.resize(n);                              //ajusta vetor com base na info
-        for (int i = 0; i < n; i++){
-            int len;
-            MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);     //pra cada string, ajusta com base no tamanho
-            strings[i].resize(len);                             //e depois recebe
-            MPI_Bcast((void*)&strings[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);
-        }
-    }
-}
-
-//divisao de tarefas :(
-static void compute_ownership_ranges(int n, int world_size, int rank, int &min, int &max) {
-    int base = n / world_size;  //carga minima
-    int remnant = n % world_size;   //azarados que vao pegar 1 a mais
-    if (rank < remnant) {
-        min = rank * (base + 1);
-        max = min + (base + 1);
-    } else {
-        min = rank * base + remnant;
-        max = min + base;
-    }
-}
-
-//  -------------------   funcoes matriz   ----------------------------
-
-static LocalBest find_localbest_pair(Matrix &matrix, std::vector<bool> &alive, int rank, int world_size) {
-    int n = matrix.size();
-    int min, max;
+class SlotManager {
+private:
+    std::vector<int> occupied_slots;    //vetor para iteracao
+    std::vector<bool> slot_state;       //vetor para verificacao rapido
+    int total_slots;
     
-    compute_ownership_ranges(n, world_size, rank, min, max);
-
-    LocalBest local_best = make_localbest(-1, -1, -1, rank);
-
-    for (int i = min, i < max; i++){
-        if (!alive[i])
-            continue;
+public:
+    SlotManager(int n) : total_slots(n) {
+        slot_state.resize(n, true);
+        occupied_slots.reserve(n);
+        for (int i = 0; i < n; ++i) {
+            occupied_slots.push_back(i);
+        }
+    }
+    
+    int remove_and_get_reusable(int i, int j) { //logica da delecao
+        slot_state[i] = false;
+        slot_state[j] = false;
         
-        for (int j = 0; j < n; j++){
-            if (i == j || !alive[j])
-                continue;
+        auto it = std::find(occupied_slots.begin(), occupied_slots.end(), i);
+        if (it != occupied_slots.end()) {
+            *it = occupied_slots.back();
+            occupied_slots.pop_back();
+        }
+        
+        it = std::find(occupied_slots.begin(), occupied_slots.end(), j);
+        if (it != occupied_slots.end()) {
+            *it = occupied_slots.back();
+            occupied_slots.pop_back();
+        }
+        
+        return std::min(i, j);
+    }
+    
+    void add_reused_slot(int slot) {    //reaproveitar um slot do perdido pro fundido
+        slot_state[slot] = true;
+        occupied_slots.push_back(slot);
+    }
+    
+    const std::vector<int>& get_occupied_slots() const {
+        return occupied_slots;
+    }
+    
+    bool is_alive(int index) const {
+        return slot_state[index];
+    }
+    
+    int count_occupied() const {
+        return occupied_slots.size();
+    }
+    
+    int total_size() const { return total_slots; }
+};
 
-            int current_overlap = matrix[i][j];
-            if (current_overlap > local_best.overlap)
-                local_best = make_localbest(current_overlap, i, j, rank);
-            else if (current_overlap == local_best.overlap && current_overlap != -1) {
-                if (i < local_best.row || (i == local_best.row && j < local_best.col))
-                    local_best = make_localbest(current_overlap, i, j, rank);
+// ----------------- funcoes de matriz -----------------
+
+class FixedOverlapMatrix {
+private:
+    std::vector<int> data;
+    int n;
+    const std::vector<std::string>& strings;
+    
+public:
+    FixedOverlapMatrix(int size, const std::vector<std::string>& str_ref) 
+        : n(size), strings(str_ref) {
+        data.resize(n * n, -1);
+        
+        #pragma omp parallel for collapse(2) schedule(dynamic, 8)
+        for (int i = 0; i < n; ++i) {
+            for (int j = 0; j < n; ++j) {
+                if (i != j) {
+                    data[i * n + j] = overlap_value(strings[i], strings[j]);
+                } else {
+                    data[i * n + j] = 0;
+                }
             }
         }
     }
-    return local_best;
-}
+    
+    int& operator()(int i, int j) { //acesso ao vetor que representa matriz (quadratico)
+        return data[i * n + j];
+    }
+    
+    const int& operator()(int i, int j) const {
+        return data[i * n + j];
+    }
+    
+    int get_overlap(int i, int j) const {
+        if (i == j) return 0;
+        return data[i * n + j];
+    }
+    
+    //atualiza so o que precisa
+    void update_slot(int reused_slot, const std::string& new_string, 
+                                    const std::vector<int>& occupied_slots) {
 
-static LocalBest select_best(const LocalBest &local, int rank, int world_size) {
-    int sendbuf[4] = { local.overlap, local.row, local.col, local.own };
-    std::vector<int> recvbuf;
+        #pragma omp parallel for schedule(static)
+        for (size_t idx = 0; idx < occupied_slots.size(); ++idx) {
+            int other_index = occupied_slots[idx];
 
-    if (rank == 0)
-        recvbuf.resize(4 * world_size);
-
-    MPI_Gather(sendbuf, 4, MPI_INT, recvbuf)
-}
-
-static LocalBest global_best_pair(LocalBest &local_best, int rank, int world_size) {
-    return select_best(local_best, rank, world_size);
-}
-
-//  -------------------   funcoes matriz   ----------------------------
-
-static void prepare_overlap_matrix(Matrix &matrix, StringVector & strings) {
-    int n = strings.size();
-    matrix.resize(n, std::vector<int>(n, 0));
-
-    #pragma omp parallel for schedule (dynamic)
-    for (int i = 0; i < n; i++){
-        for (int j = 0; j < n; j++){
-            if (i != j)
-                matrix[i][j] = overlap_value(strings[i], strings[j]);
+            if (other_index != reused_slot) {   //atualiza de maneira espelhada na matriz
+                data[reused_slot * n + other_index] = overlap_value(new_string, strings[other_index]);
+                data[other_index * n + reused_slot] = overlap_value(strings[other_index], new_string);
+            }
         }
+        
+        data[reused_slot * n + reused_slot] = 0;
+    }
+};
+
+// ----------------- funcoes de melhor local -----------------
+
+struct LocalBest {
+    int overlap;
+    int i;
+    int j;
+    int owner;
+};
+
+static LocalBest make_localbest(int ov, int i, int j, int owner) {
+    return LocalBest{ov, i, j, owner};
+}
+
+static bool better_localbest(const LocalBest &a, const LocalBest &b) {
+    if (a.overlap != b.overlap) return a.overlap > b.overlap;
+    if (a.i != b.i) return a.i < b.i;
+    if (a.j != b.j) return a.j < b.j;
+    return a.owner < b.owner;
+}
+
+// ----------------- funcoes de MPI -----------------
+
+//comunicacao de strings e tamanhos
+static void mpi_broadcast_strings(int rank, std::vector<std::string> &strings) {
+    int n;
+    if (rank == 0) {
+        n = (int)strings.size();
+    }
+    MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    
+    if (rank != 0) {
+        strings.resize(n);
+    }
+    
+    for (int i = 0; i < n; ++i) {
+        int len;
+        if (rank == 0) {
+            len = (int)strings[i].size();
+        }
+        MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);
+        
+        if (rank != 0) {
+            strings[i].resize(len);
+        }
+        MPI_Bcast((void *)strings[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);
     }
 }
 
-static void update_matrix (Matrix &matrix, StringVector &strings, std::vector<bool> &alive, 
-                                                int new_index, int removed_i, int removed_j) {
-    int n = strings.size();
+// ----------------- funcao de achar melhor local -----------------
 
-    if (n > matrix.size()) {
-        matrix.resize(n);
-        for (auto &row : matrix) {
-            row.resize(n, 0);
-        }
-    }
-
-    #pragma omp parallel for
-    for (int k = 0; k < n; k++){
-        if (!alive[k] || k == new_index){
-            matrix[new_index][k] = 0;
-            matrix[k][new_index] = 0;
-            continue;
-        }
-
-        int value = overlap_value(strings[new_index], strings[k]);
-        matrix[new_index][k] = value;
-        matrix[k][new_index] = value;
-    }
-
-    for (int k = 0; k < n; k++){
-        matrix[removed_i][k] = 0;
-        matrix[k][removed_i] = 0;
-        matrix[removed_j][k] = 0;
-        matrix[k][removed_j] = 0;
-    }
-}
-
-//  -------------------   funcoes matriz main   ----------------------------
-
-
-inline auto
-pop_two_elements_and_push_overlap
-        (Set <String>& ss, const Pair <String, String>& p) -> Set <String>&
+static LocalBest compute_local_best_rows(
+    const std::vector<std::string>& strings,
+    const SlotManager& slot_manager,
+    const FixedOverlapMatrix& overlap_matrix,
+    int rank, int world_size)
 {
-    ss = remove (ss, p.first)  ;
-    ss = remove (ss, p.second) ;
-    ss = push   (ss, overlap (p.first, p.second)) ;
-    return ss ;
-}
+    const std::vector<int>& occupied_slots = slot_manager.get_occupied_slots();
 
-auto
-all_distinct_pairs (const Set <String>& ss) -> Set <Pair <String, String>>
-{
-    Set <Pair <String, String>> x ;
-    for (const String& s1 : ss) {
-        for (const String& s2 : ss) {
-            if (s1 != s2) x.insert (make_pair (s1, s2)) ;
+    int n_occupied = (int)occupied_slots.size();
+    if (n_occupied < 2) return make_localbest(-1, -1, -1, rank);
+
+    // divide os blocos por linhas
+    int base = n_occupied / world_size;
+    int rem  = n_occupied % world_size;
+    int startRow = rank * base + std::min(rank, rem);
+    int rows = base + ((rank < rem) ? 1 : 0);
+    int endRow = startRow + rows;
+
+    LocalBest best = make_localbest(-1, INT_MAX, INT_MAX, rank);
+
+    #pragma omp parallel
+    {
+        LocalBest local_best = make_localbest(-1, INT_MAX, INT_MAX, rank);
+
+        //pra cada linha, verifica todas as colunas pertencentes (tudo na msm linhad de cache :)
+        #pragma omp for schedule(dynamic)
+        for (int local_i = startRow; local_i < endRow; ++local_i) {
+            int i = occupied_slots[local_i];
+            
+            for (int local_j = 0; local_j < n_occupied; ++local_j) {
+                if (local_j == local_i) continue;
+
+                int j = occupied_slots[local_j];
+                int ov = overlap_matrix.get_overlap(i, j);
+                
+                //teste com varios fallbacks de consistencia pra atualizar a thread local
+                if (ov > local_best.overlap || 
+                   (ov == local_best.overlap && 
+                   (i < local_best.i || (i == local_best.i && j < local_best.j)))) {
+                    local_best = make_localbest(ov, i, j, rank);
+                }
+            }
         }
-    }
-    return x ;
-}
 
-auto
-highest_overlap_value
-        (const Set <Pair <String, String>>& sp) -> Pair <String, String>
-{
-    Pair <String, String> x = first_element (sp) ;
-    for (const Pair <String, String>& p : sp) {
-        if ( overlap_value (p.first, p.second)
-                > overlap_value (x.first, x.second) )
+        #pragma omp critical    //ao final, finca o melhor
         {
-            x = p ;
+            if (better_localbest(local_best, best)) {
+                best = local_best;
+            }
         }
     }
-    return x ;
+
+    return best;
 }
 
-auto
-pair_of_strings_with_highest_overlap_value
-        (const Set <String>& ss) -> Pair <String, String>
+// ----------------- funcao de fusao -----------------
+
+static int perform_fusion_with_slot_reuse(const LocalBest &chosen, int rank,
+                                         std::vector<std::string>& strings,
+                                         SlotManager& slot_manager,
+                                         FixedOverlapMatrix& overlap_matrix) 
 {
-    return highest_overlap_value (all_distinct_pairs (ss)) ;
+    if (chosen.overlap < 0) return -1;
+    
+    String fused;
+
+    if (rank == chosen.owner) fused = overlap(strings[chosen.i], strings[chosen.j]);
+    
+    int len = (int)fused.size();    //avisa geral do tamanho da fusao
+    MPI_Bcast(&len, 1, MPI_INT, chosen.owner, MPI_COMM_WORLD);
+    
+    if (rank != chosen.owner) fused.resize(len);
+    
+    MPI_Bcast((void *)fused.data(), len, MPI_CHAR, chosen.owner, MPI_COMM_WORLD);
+    
+    //desabilita as strings escolhidas, usando o slot de uma pro resultado da fusao
+    int reused_slot = slot_manager.remove_and_get_reusable(chosen.i, chosen.j);
+    strings[reused_slot] = fused;
+    slot_manager.add_reused_slot(reused_slot);
+    
+    //atualiza a matriz com base no slot atualizado (evita mexer no que nao precisa)
+    const std::vector<int>& occupied_slots = slot_manager.get_occupied_slots();
+    overlap_matrix.update_slot(reused_slot, fused, occupied_slots);
+    
+    return reused_slot;
 }
 
-auto
-shortest_superstring (Set <String> t) -> String
-{
-    if (is_empty (t)) return "" ;
-    while (at_least_two_elements_in (t)) {
-        t = pop_two_elements_and_push_overlap
-            ( t
-            , pair_of_strings_with_highest_overlap_value (t) ) ;
+static LocalBest gather_and_select_best(const LocalBest &local, int rank, int world_size) {
+    int sendbuf[4] = {local.overlap, local.i, local.j, local.owner};
+    std::vector<int> recvbuf;
+    
+    if (rank == 0) recvbuf.resize(4 * world_size);  //recebe as opcoes
+    MPI_Gather(sendbuf, 4, MPI_INT, (rank == 0) ? recvbuf.data() : nullptr, 4, MPI_INT, 0, MPI_COMM_WORLD);
+    
+    LocalBest chosen = make_localbest(-1, -1, -1, -1);
+    if (rank == 0) {
+        for (int r = 0; r < world_size; ++r) {
+            LocalBest cand = make_localbest(
+                recvbuf[r * 4 + 0], recvbuf[r * 4 + 1], 
+                recvbuf[r * 4 + 2], recvbuf[r * 4 + 3]
+            );
+            if (better_localbest(cand, chosen)) chosen = cand;
+        }
     }
-    return first_element (t) ;
+    
+    int chosenbuf[4];
+    if (rank == 0) {
+        chosenbuf[0] = chosen.overlap; chosenbuf[1] = chosen.i;
+        chosenbuf[2] = chosen.j; chosenbuf[3] = chosen.owner;
+    }
+    MPI_Bcast(chosenbuf, 4, MPI_INT, 0, MPI_COMM_WORLD);    //comunica a todos a escolha final do round
+    
+    if (rank != 0) {
+        chosen.overlap = chosenbuf[0]; chosen.i = chosenbuf[1];
+        chosen.j = chosenbuf[2]; chosen.owner = chosenbuf[3];
+    }
+    return chosen;
 }
 
-auto
-main (int argc, char const* argv[]) -> int
-{
-    Set <String> ss = read_strings_from_standard_input () ;
-    write_string_to_standard_ouput (shortest_superstring (ss)) ;
-    return 0 ;
+// ----------------- funcao main -----------------
+
+int main(int argc, char *argv[]) {
+    double start_total, end_total, start_parallel = 0.0, end_parallel = 0.0;
+    double parallel_time = 0.0;
+    
+    start_total = MPI_Wtime();  //ajustes de tempo
+    
+    int rank = 0;
+    int world_size = 1;
+    
+    #ifndef SEQUENTIAL_PURE //setups paralelos
+    MPI_Init(&argc, &argv);
+    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
+    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
+    #endif
+    
+    std::vector<std::string> strings;   //inputs
+    if (rank == 0) {
+        Size n = read_size(standard_input); 
+        strings.resize(n);
+        for (Size i = 0; i < n; ++i) {
+            strings[i] = read_string(standard_input);
+        }
+    }
+    
+    #ifndef SEQUENTIAL_PURE
+    mpi_broadcast_strings(rank, strings);
+    #endif
+    
+    SlotManager slot_manager(strings.size());   //setupds das estruturas de dados
+    FixedOverlapMatrix overlap_matrix(strings.size(), strings); 
+    
+    #ifndef SEQUENTIAL_PURE
+    MPI_Barrier(MPI_COMM_WORLD);    //temporal
+    start_parallel = MPI_Wtime();
+    #else
+    start_parallel = start_total;
+    #endif
+    
+    while (true) {
+        LocalBest local = compute_local_best_rows(
+            strings, slot_manager, overlap_matrix, rank, world_size);
+        
+        LocalBest chosen;
+        
+        #ifndef SEQUENTIAL_PURE
+        chosen = gather_and_select_best(local, rank, world_size); 
+        #else
+        chosen = local;
+        #endif
+        
+        // Condição de parada
+        if (chosen.overlap < 0 || slot_manager.count_occupied() <= 1) break;
+        
+        #ifndef SEQUENTIAL_PURE
+        perform_fusion_with_slot_reuse(chosen, rank, strings, slot_manager, overlap_matrix);
+        #else
+        if (chosen.overlap >= 0) {  //vesao sequencial
+            String fused = overlap(strings[chosen.i], strings[chosen.j]);
+            int reused_slot = slot_manager.remove_and_get_reusable(chosen.i, chosen.j);
+            strings[reused_slot] = fused;
+            slot_manager.add_reused_slot(reused_slot);
+            const std::vector<int>& occupied_slots = slot_manager.get_occupied_slots();
+            overlap_matrix.update_slot(reused_slot, fused, occupied_slots);
+        }
+        #endif
+
+        //condicao de parada
+        if (slot_manager.count_occupied() <= 1) break;
+
+    }
+    
+    #ifndef SEQUENTIAL_PURE
+    end_parallel = MPI_Wtime();
+    double local_parallel_time = end_parallel - start_parallel;
+    MPI_Reduce(&local_parallel_time, &parallel_time, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    #else
+    end_parallel = MPI_Wtime();
+    parallel_time = end_parallel - start_parallel;
+    #endif
+    
+    if (rank == 0 && !strings.empty()) {
+        const std::vector<int>& final_occupied = slot_manager.get_occupied_slots();
+        if (!final_occupied.empty()) {  //print do resultado
+            write_string_to_standard_ouput(strings[final_occupied[0]]);
+        }
+        
+        end_total = MPI_Wtime();
+        double total_time = end_total - start_total;
+
+        std::cout.precision(6);
+        std::cout << "Tempo total: " << total_time * 1000.0 << " ms" << std::endl;
+        std::cout << "Tempo paralelo: " << parallel_time * 1000.0 << " ms" << std::endl;
+    }
+    
+    #ifndef SEQUENTIAL_PURE
+    MPI_Finalize();
+    #endif
+    
+    return 0;
 }
