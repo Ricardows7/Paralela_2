@@ -1,380 +1,402 @@
-// shsup_mpi.cpp
-#include <mpi.h>
-#include <omp.h>            // optional; requires -fopenmp
 #include <algorithm>
 #include <iostream>
 #include <set>
 #include <string>
 #include <utility>
+
+#include <mpi.h>
+
+#include <omp.h>
 #include <vector>
-#include <queue>
 #include <cstddef>
 
-using Boolean = bool;
-using Size = std::size_t;
-using String = std::string;
+#define standard_input  std::cin
+#define standard_output std::cout
+
+using Boolean = bool ;
+using Size    = std::size_t ;
+using String  = std::string ;
+
+using InStream  = std::istream ;
+using OutStream = std::ostream ;
+
+using Matrix = std::vector<std::vector<int>> ; 
+using StringVector = std::vector<std::string> ;
 
 template <typename T, typename U>
-using Pair = std::pair<T, U>;
+using Pair = std::pair <T, U> ;
 
-template <typename T, typename C = std::less<T>>
-using Set = std::set<T>;
+template <typename T, typename C = std::less <T>>
+using Set = std::set <T> ;
 
 template <typename T>
-using SizeType = typename T::size_type;
+using SizeType = typename T :: size_type ;
 
-inline SizeType<String> get_size(const String &x) { return x.size(); }
-
-// ---------------- string overlap (KMP helper) ----------------
-
-// prefix-function (pi) for KMP
-static std::vector<int> prefix_function(const std::string &s) {
-    int n = (int)s.size();
-    std::vector<int> pi(n);
-    for (int i = 1; i < n; ++i) {
-        int j = pi[i - 1];
-        while (j > 0 && s[i] != s[j]) j = pi[j - 1];
-        if (s[i] == s[j]) ++j;
-        pi[i] = j;
-    }
-    return pi;
-}
-
-// returns length of longest suffix of `a` that is prefix of `b`
-// implemented deterministically and efficiently via KMP
-static int overlap_kmp(const std::string &a, const std::string &b) {
-    if (a.empty() || b.empty()) return 0;
-    int maxk = std::min((int)a.size(), (int)b.size());
-    // pattern = b + '#' + suffix_of_a_of_length_maxk
-    std::string pattern;
-    pattern.reserve((int)b.size() + 1 + maxk);
-    pattern.append(b);
-    pattern.push_back('#');
-    pattern.append(a.data() + ((int)a.size() - maxk), maxk);
-    auto pi = prefix_function(pattern);
-    return pi.back();
-}
-
-inline int overlap_value(const String &s, const String &t) {
-    // disallow i == j at caller; here we compute non-negative overlap
-    return overlap_kmp(s, t);
-}
-
-inline String overlap_string(const String &s, const String &t) {
-    int k = overlap_value(s, t);
-    if (k <= 0) return s + t;
-    // append t from position k
-    return s + t.substr(k);
-}
-
-// ---------------- deterministic selection structs ----------------
-
+//  -------------------   funcoes base   ----------------------------
 struct LocalBest {
-    int overlap; // -1 means no candidate
-    int i;
-    int j;
-    int owner; // rank that proposes i
-};
-
-static LocalBest make_localbest(int ov, int i, int j, int owner) {
-    return LocalBest{ov, i, j, owner};
+    int overlap; //-1 significa nada
+    int row;
+    int col;
+    int owner; //quem mandou o localbest
 }
 
-// deterministic compare: return true if a is better than b
+static LocalBest make_localbest(int ov, int rol, int col, int own) {
+    return LocalBest{ov, rol, col, own};
+}
+
+//criterios apos o 1 nessa funcao servem para desempate e consistencia de resposta :)
 static bool better_localbest(const LocalBest &a, const LocalBest &b) {
-    if (a.overlap != b.overlap) return a.overlap > b.overlap;
-    if (a.i != b.i) return a.i < b.i;
-    if (a.j != b.j) return a.j < b.j;
-    return a.owner < b.owner;
+    if (a.overlap != b.overlap) return a.overlap > b.overlap;   //1 criterio: quem tem maior overlap
+    if (a.row != b.row) return a.i < b.i;   //2 criterio: quem tem menor numero de linha
+    if (a.col != b.col) return a.col < b.col;   //3 criterio: quem tem menor numero de coluna
+    return a.own < b.own;   //ultimo criterio: indice do dono
 }
 
-// ---------------- ownership helpers ----------------
-static void compute_ownership_ranges(int n, int world_size, int rank, int &lo, int &hi) {
-    int base = n / world_size;
-    int rem = n % world_size;
-    if (rank < rem) {
-        lo = rank * (base + 1);
-        hi = lo + (base + 1);
-    } else {
-        lo = rank * base + rem;
-        hi = lo + base;
+//  -------------------   funcoes utils   ----------------------------
+
+template <typename C> inline auto
+get_size (const C& x) -> SizeType <C>
+{
+    return x.size () ;
+}
+
+template <typename C> inline auto
+at_least_two_elements_in (const C& c) -> Boolean
+{
+    return get_size (c) > SizeType <C> (1) ;
+}
+
+template <typename T> inline auto
+first_element (const Set <T>& x) -> T
+{
+    return *(x.begin ()) ;
+}
+
+template <typename T> inline auto
+second_element (const Set <T>& x) -> T
+{
+    return *(std::next (x.begin ())) ;
+}
+
+template <typename T> inline auto
+remove (Set <T>& x, const T& e) -> Set <T>&
+{
+    x.erase (e) ;
+    return x ;
+}
+
+template <typename T> inline auto
+push (Set <T>& x, const T& e) -> Set <T>&
+{
+    x.insert (e) ;
+    return x ;
+}
+
+template <typename C> inline auto
+is_empty (const C& x) -> Boolean
+{
+    return x.is_empty () ;
+}
+
+//  -------------------   funcoes calculo overlap simples   ----------------------------
+
+Boolean is_prefix (const String& a, const String& b)
+{
+    if (get_size (a) > get_size (b))
+        return false ;
+    if ( !
+            ( std::mismatch
+                ( a.begin ()
+                , a.end   ()
+                , b.begin () )
+                    .first == a.end () ) )
+        return false ;
+    return true ;
+}
+
+inline auto
+suffix_from_position (const String& x, SizeType <String> i) -> String
+{
+    return x.substr (i) ;
+}
+
+inline auto
+remove_prefix (const String& x, SizeType <String> n) -> String
+{
+    if (get_size (x) > n)
+        return suffix_from_position (x, n) ;
+    return x ;
+}
+
+auto
+all_suffixes (const String& x) -> Set <String>
+{
+    Set <String> ss ;
+    SizeType <String> n = size (x) ;
+    while (-- n) {
+        ss.insert (x.substr (n)) ;
     }
+    return ss ;
 }
 
-// ---------------- I/O helpers (rank 0 reads, broadcasts to others) ----------------
-static void mpi_broadcast_strings(int rank, std::vector<std::string> &strings) {
-    if (rank == 0) {
-        int n = (int)strings.size();
-        MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        for (int i = 0; i < n; ++i) {
-            int len = (int)strings[i].size();
-            MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            MPI_Bcast((void *)strings[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);
+auto
+commom_suffix_and_prefix (const String& a, const String& b) -> String
+{
+    if (is_empty (a)) return "" ;
+    if (is_empty (b)) return "" ;
+    String x = "" ;
+    for (const String& s : all_suffixes (a)) {
+        if (is_prefix (s, b) && get_size (s) > get_size (x)) {
+            x = s ;
         }
-    } else {
+    }
+    return x ;
+}
+
+inline auto
+overlap_value (const String& s, const String& t) -> SizeType <String>
+{
+    return get_size (commom_suffix_and_prefix (s, t)) ;
+}
+
+auto
+overlap (const String& s, const String& t) -> String
+{
+    String c = commom_suffix_and_prefix (s, t) ;
+    return s + remove_prefix (t, get_size (c)) ;
+}
+
+//  -------------------   funcoes I/O   ----------------------------
+
+inline auto
+write_string_and_break_line (OutStream& out, String s) -> void
+{
+    out << s << std::endl ;
+}
+
+inline auto
+read_size (InStream& in) -> Size
+{
+    Size n ;
+    in >>  n ;
+    return n ;
+}
+
+inline auto
+read_string (InStream& in) -> String
+{
+    String s ;
+    in >>  s ;
+    return s ;
+}
+
+auto
+read_strings_from_standard_input () -> Set <String>
+{
+    using N = SizeType <Set <String>> ;
+    Set <String> x ;
+    N n = N (read_size (standard_input)) ;
+    while (n --) x.insert (read_string (standard_input)) ;
+    return x ;
+}
+
+inline auto
+write_string_to_standard_ouput (const String& s) -> void
+{
+    write_string_and_break_line (standard_output, s) ;
+}
+
+//  -------------------   funcoes MPI utils  ----------------------------
+
+static void mpi_broadcast_strings(int rank, StringVector &strings) {
+    if (rank == 0) {    //host
+        int n = strings.size();
+        MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);   //envia quantidade de strings pra todos
+        for (int i = 0; i < n; i++){
+            int length = strings[i].size();
+            MPI_Bcast(&len, 1, MPI_INT, 0 MPI_COMM_WORLD);                              //pra cada string, envia o tamanho
+            MPI_Bcast((void*)strings[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);      //seguido da string em si
+        }
+    } else {    //nao host
         int n;
-        MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);
-        strings.resize(n);
-        for (int i = 0; i < n; ++i) {
+        MPI_Bcast(&n, 1, MPI_INT, 0, MPI_COMM_WORLD);   //recebe quantidade de strings
+        strings.resize(n);                              //ajusta vetor com base na info
+        for (int i = 0; i < n; i++){
             int len;
-            MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);
-            strings[i].resize(len);
-            MPI_Bcast((void *)strings[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);
+            MPI_Bcast(&len, 1, MPI_INT, 0, MPI_COMM_WORLD);     //pra cada string, ajusta com base no tamanho
+            strings[i].resize(len);                             //e depois recebe
+            MPI_Bcast((void*)&strings[i].data(), len, MPI_CHAR, 0, MPI_COMM_WORLD);
         }
     }
 }
 
-// ---------------- compute local best (owned indices) ----------------
-static LocalBest compute_local_best(const std::vector<std::string> &strings,
-                                    const std::vector<char> &alive,
-                                    int n, int rank, int world_size)
-{
-    int lo, hi;
-    compute_ownership_ranges(n, world_size, rank, lo, hi);
-
-    LocalBest best = make_localbest(-1, -1, -1, rank);
-
-    // Parallelize over i owned by this rank (optional)
-    #pragma omp parallel
-    {
-        LocalBest local_best = make_localbest(-1, -1, -1, rank);
-        #pragma omp for schedule(dynamic)
-        for (int i = lo; i < hi; ++i) {
-            if (!alive[i]) continue;
-            // find best j deterministically: j ascending
-            int best_j = -1;
-            int best_ov = -1;
-            for (int j = 0; j < n; ++j) {
-                if (j == i) continue;
-                if (!alive[j]) continue;
-                int ov = overlap_value(strings[i], strings[j]);
-                if (ov > best_ov || (ov == best_ov && j < best_j)) {
-                    best_ov = ov;
-                    best_j = j;
-                }
-            }
-            if (best_j >= 0) {
-                LocalBest candidate = make_localbest(best_ov, i, best_j, rank);
-                #pragma omp critical
-                {
-                    if (better_localbest(candidate, local_best)) local_best = candidate;
-                }
-            }
-        } // end omp for
-        #pragma omp critical
-        {
-            if (better_localbest(local_best, best)) best = local_best;
-        }
-    } // end omp parallel
-
-    return best;
-}
-
-// ---------------- gather-best and root-select (deterministic) ----------------
-static LocalBest gather_and_select_best(const LocalBest &local, int rank, int world_size) {
-    int sendbuf[4] = {local.overlap, local.i, local.j, local.owner};
-    std::vector<int> recvbuf;
-    if (rank == 0) recvbuf.resize(4 * world_size);
-    MPI_Gather(sendbuf, 4, MPI_INT, recvbuf.data(), 4, MPI_INT, 0, MPI_COMM_WORLD);
-
-    LocalBest chosen = make_localbest(-1, -1, -1, -1);
-    if (rank == 0) {
-        for (int r = 0; r < world_size; ++r) {
-            int ov = recvbuf[r * 4 + 0];
-            int i = recvbuf[r * 4 + 1];
-            int j = recvbuf[r * 4 + 2];
-            int owner = recvbuf[r * 4 + 3];
-            LocalBest cand = make_localbest(ov, i, j, owner);
-            if (better_localbest(cand, chosen)) chosen = cand;
-        }
-    }
-    int chosenbuf[4];
-    if (rank == 0) {
-        chosenbuf[0] = chosen.overlap;
-        chosenbuf[1] = chosen.i;
-        chosenbuf[2] = chosen.j;
-        chosenbuf[3] = chosen.owner;
-    }
-    MPI_Bcast(chosenbuf, 4, MPI_INT, 0, MPI_COMM_WORLD);
-    if (rank != 0) {
-        chosen.overlap = chosenbuf[0];
-        chosen.i = chosenbuf[1];
-        chosen.j = chosenbuf[2];
-        chosen.owner = chosenbuf[3];
-    }
-    return chosen;
-}
-
-// ---------------- owner performs fusion and broadcasts fused string ----------------
-static int perform_and_broadcast_fusion(const LocalBest &chosen, int rank,
-                                        std::vector<std::string> &strings,
-                                        std::vector<char> &alive)
-{
-    int new_index = -1;
-    if (chosen.overlap < 0) return -1;
-
-    if (rank == chosen.owner) {
-        std::string fused = overlap_string(strings[chosen.i], strings[chosen.j]);
-        int len = (int)fused.size();
-        MPI_Bcast(&len, 1, MPI_INT, chosen.owner, MPI_COMM_WORLD);
-        MPI_Bcast((void *)fused.data(), len, MPI_CHAR, chosen.owner, MPI_COMM_WORLD);
-        new_index = (int)strings.size();
-        strings.push_back(fused);
-        alive.push_back(1);
-        alive[chosen.i] = 0;
-        alive[chosen.j] = 0;
+//divisao de tarefas :(
+static void compute_ownership_ranges(int n, int world_size, int rank, int &min, int &max) {
+    int base = n / world_size;  //carga minima
+    int remnant = n % world_size;   //azarados que vao pegar 1 a mais
+    if (rank < remnant) {
+        min = rank * (base + 1);
+        max = min + (base + 1);
     } else {
-        int len;
-        MPI_Bcast(&len, 1, MPI_INT, chosen.owner, MPI_COMM_WORLD);
-        std::string fused;
-        fused.resize(len);
-        MPI_Bcast((void *)fused.data(), len, MPI_CHAR, chosen.owner, MPI_COMM_WORLD);
-        new_index = (int)strings.size();
-        strings.push_back(fused);
-        alive.push_back(1);
-        alive[chosen.i] = 0;
-        alive[chosen.j] = 0;
+        min = rank * base + remnant;
+        max = min + base;
     }
-    return new_index;
 }
 
-// ---------------- reload local bests (recompute best_pair for affected entries) ----------------
-static void reload_heap_local(int new_index,
-                              std::vector<std::string> &strings,
-                              std::vector<char> &alive,
-                              std::vector<int> &best_pair)
+//  -------------------   funcoes matriz   ----------------------------
+
+static LocalBest find_localbest_pair(Matrix &matrix, std::vector<bool> &alive, int rank, int world_size) {
+    int n = matrix.size();
+    int min, max;
+    
+    compute_ownership_ranges(n, world_size, rank, min, max);
+
+    LocalBest local_best = make_localbest(-1, -1, -1, rank);
+
+    for (int i = min, i < max; i++){
+        if (!alive[i])
+            continue;
+        
+        for (int j = 0; j < n; j++){
+            if (i == j || !alive[j])
+                continue;
+
+            int current_overlap = matrix[i][j];
+            if (current_overlap > local_best.overlap)
+                local_best = make_localbest(current_overlap, i, j, rank);
+            else if (current_overlap == local_best.overlap && current_overlap != -1) {
+                if (i < local_best.row || (i == local_best.row && j < local_best.col))
+                    local_best = make_localbest(current_overlap, i, j, rank);
+            }
+        }
+    }
+    return local_best;
+}
+
+static LocalBest select_best(const LocalBest &local, int rank, int world_size) {
+    int sendbuf[4] = { local.overlap, local.row, local.col, local.own };
+    std::vector<int> recvbuf;
+
+    if (rank == 0)
+        recvbuf.resize(4 * world_size);
+
+    MPI_Gather(sendbuf, 4, MPI_INT, recvbuf)
+}
+
+static LocalBest global_best_pair(LocalBest &local_best, int rank, int world_size) {
+    return select_best(local_best, rank, world_size);
+}
+
+//  -------------------   funcoes matriz   ----------------------------
+
+static void prepare_overlap_matrix(Matrix &matrix, StringVector & strings) {
+    int n = strings.size();
+    matrix.resize(n, std::vector<int>(n, 0));
+
+    #pragma omp parallel for schedule (dynamic)
+    for (int i = 0; i < n; i++){
+        for (int j = 0; j < n; j++){
+            if (i != j)
+                matrix[i][j] = overlap_value(strings[i], strings[j]);
+        }
+    }
+}
+
+static void update_matrix (Matrix &matrix, StringVector &strings, std::vector<bool> &alive, 
+                                                int new_index, int removed_i, int removed_j) {
+    int n = strings.size();
+
+    if (n > matrix.size()) {
+        matrix.resize(n);
+        for (auto &row : matrix) {
+            row.resize(n, 0);
+        }
+    }
+
+    #pragma omp parallel for
+    for (int k = 0; k < n; k++){
+        if (!alive[k] || k == new_index){
+            matrix[new_index][k] = 0;
+            matrix[k][new_index] = 0;
+            continue;
+        }
+
+        int value = overlap_value(strings[new_index], strings[k]);
+        matrix[new_index][k] = value;
+        matrix[k][new_index] = value;
+    }
+
+    for (int k = 0; k < n; k++){
+        matrix[removed_i][k] = 0;
+        matrix[k][removed_i] = 0;
+        matrix[removed_j][k] = 0;
+        matrix[k][removed_j] = 0;
+    }
+}
+
+//  -------------------   funcoes matriz main   ----------------------------
+
+
+inline auto
+pop_two_elements_and_push_overlap
+        (Set <String>& ss, const Pair <String, String>& p) -> Set <String>&
 {
-    int N = (int)strings.size();
-    // ensure best_pair resized
-    if ((int)best_pair.size() < N) best_pair.resize(N, -1);
-
-    // compute best for new_index
-    if (alive[new_index]) {
-        int best_j = -1;
-        int best_ov = -1;
-        #pragma omp parallel
-        {
-            int loc_best_j = -1;
-            int loc_best_ov = -1;
-            #pragma omp for nowait
-            for (int j = 0; j < N; ++j) {
-                if (j == new_index) continue;
-                if (!alive[j]) continue;
-                int ov = overlap_value(strings[new_index], strings[j]);
-                if (ov > loc_best_ov || (ov == loc_best_ov && (loc_best_j == -1 || j < loc_best_j))) {
-                    loc_best_ov = ov;
-                    loc_best_j = j;
-                }
-            }
-            #pragma omp critical
-            {
-                if (loc_best_ov > best_ov || (loc_best_ov == best_ov && (best_j == -1 || loc_best_j < best_j))) {
-                    best_ov = loc_best_ov;
-                    best_j = loc_best_j;
-                }
-            }
-        }
-        best_pair[new_index] = best_j;
-    }
-
-    // for all i, if their best_pair is dead, recompute
-    int M = (int)best_pair.size();
-    #pragma omp parallel for schedule(dynamic)
-    for (int i = 0; i < M; ++i) {
-        if (!alive[i]) continue;
-        int curr = best_pair[i];
-        if (curr >= 0 && !alive[curr]) {
-            int best_j = -1;
-            int best_ov = -1;
-            for (int j = 0; j < N; ++j) {
-                if (j == i) continue;
-                if (!alive[j]) continue;
-                int ov = overlap_value(strings[i], strings[j]);
-                if (ov > best_ov || (ov == best_ov && (best_j == -1 || j < best_j))) {
-                    best_ov = ov;
-                    best_j = j;
-                }
-            }
-            best_pair[i] = best_j;
-        }
-    }
+    ss = remove (ss, p.first)  ;
+    ss = remove (ss, p.second) ;
+    ss = push   (ss, overlap (p.first, p.second)) ;
+    return ss ;
 }
 
-// ---------------- main loop + helpers ----------------
-int main(int argc, char *argv[]) {
-    MPI_Init(&argc, &argv);
-    int rank = 0, world_size = 1;
-    MPI_Comm_rank(MPI_COMM_WORLD, &rank);
-    MPI_Comm_size(MPI_COMM_WORLD, &world_size);
-
-    // Read input on rank 0, broadcast to others
-    std::vector<std::string> strings;
-    if (rank == 0) {
-        int n;
-        if (!(std::cin >> n)) {
-            MPI_Finalize();
-            return 0;
-        }
-        strings.reserve(n);
-        for (int i = 0; i < n; ++i) {
-            std::string s;
-            std::cin >> s;
-            strings.push_back(s);
+auto
+all_distinct_pairs (const Set <String>& ss) -> Set <Pair <String, String>>
+{
+    Set <Pair <String, String>> x ;
+    for (const String& s1 : ss) {
+        for (const String& s2 : ss) {
+            if (s1 != s2) x.insert (make_pair (s1, s2)) ;
         }
     }
-    mpi_broadcast_strings(rank, strings);
+    return x ;
+}
 
-    int n = (int)strings.size();
-    std::vector<char> alive(n, 1);
-    std::vector<int> best_pair(n, -1);
-
-    // initial local best_pair computation (parallelizable per rank)
-    // We'll compute nothing global yet; each rank will compute for its owned i when needed
-    // Main loop: compute local best per rank -> gather -> choose global -> fuse -> update -> repeat
-
-    while (true) {
-        // compute local best candidate
-        LocalBest local = compute_local_best(strings, alive, n, rank, world_size);
-
-        // gather and choose global best (deterministic at root)
-        LocalBest chosen = gather_and_select_best(local, rank, world_size);
-
-        // termination if no candidate (overlap < 0)
-        if (chosen.overlap < 0) break;
-
-        // owner performs fusion and broadcast fused string; all ranks update strings and alive
-        int new_index = perform_and_broadcast_fusion(chosen, rank, strings, alive);
-        if (new_index < 0) break;
-
-        // reload local bests (parallel inside rank)
-        reload_heap_local(new_index, strings, alive, best_pair);
-
-        // update global alive count: each rank counts local alive, then sum
-        int local_alive = 0;
-        for (char a : alive) if (a) ++local_alive;
-        int global_alive = 0;
-        MPI_Allreduce(&local_alive, &global_alive, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-
-        if (global_alive <= 1) break;
-
-        // update n because strings vector grew
-        n = (int)strings.size();
-    }
-
-    // determine final string deterministically: prefer strings.back() if alive
-    std::string final_answer;
-    if (!strings.empty() && alive.back()) final_answer = strings.back();
-    else {
-        for (int i = (int)strings.size() - 1; i >= 0; --i) {
-            if (alive[i]) { final_answer = strings[i]; break; }
+auto
+highest_overlap_value
+        (const Set <Pair <String, String>>& sp) -> Pair <String, String>
+{
+    Pair <String, String> x = first_element (sp) ;
+    for (const Pair <String, String>& p : sp) {
+        if ( overlap_value (p.first, p.second)
+                > overlap_value (x.first, x.second) )
+        {
+            x = p ;
         }
     }
+    return x ;
+}
 
-    // print only from rank 0
-    if (rank == 0) {
-        if (!final_answer.empty()) std::cout << final_answer << '\n';
+auto
+pair_of_strings_with_highest_overlap_value
+        (const Set <String>& ss) -> Pair <String, String>
+{
+    return highest_overlap_value (all_distinct_pairs (ss)) ;
+}
+
+auto
+shortest_superstring (Set <String> t) -> String
+{
+    if (is_empty (t)) return "" ;
+    while (at_least_two_elements_in (t)) {
+        t = pop_two_elements_and_push_overlap
+            ( t
+            , pair_of_strings_with_highest_overlap_value (t) ) ;
     }
+    return first_element (t) ;
+}
 
-    MPI_Finalize();
-    return 0;
+auto
+main (int argc, char const* argv[]) -> int
+{
+    Set <String> ss = read_strings_from_standard_input () ;
+    write_string_to_standard_ouput (shortest_superstring (ss)) ;
+    return 0 ;
 }
